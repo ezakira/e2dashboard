@@ -25,7 +25,7 @@ import supabase
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-from flask import Flask, Response
+from flask import Flask, Response, render_template
 from datetime import datetime, timezone, timedelta
 
 
@@ -36,13 +36,22 @@ app = Flask(__name__)
 def health_check():
     return Response("OK", status=200)
 
+@app.route('/') 
+def index():
+    # serves templates/index.html
+    return render_template('status.html')
+
+@app.route('/help')
+def help_page():
+    # serves templates/help.html
+    return render_template('help.html')
+
 # Run in a separate thread
 import threading
-threading.Thread(target=lambda: app.run(host='0.0.0.0', port=8080), daemon=True).start()
+threading.Thread(target=lambda: app.run(host='0.0.0.0', port=7070), daemon=True).start()
 
-HELP_PATH = Path(__file__).parent / "help.html"
-with open(HELP_PATH, "r", encoding="utf-8") as f:
-    HELP_TEXT = f.read()
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+HELP_TEXT = (TEMPLATES_DIR / "help.html").read_text(encoding="utf-8")
 
 load_dotenv()
 USER_BUSY = {}
