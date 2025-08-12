@@ -1,5 +1,7 @@
 import logging
 import random
+import requests
+from collections import deque
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -25,10 +27,14 @@ import supabase
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, make_response, jsonify
 from datetime import datetime, timezone, timedelta
 
-
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -46,9 +52,45 @@ def help_page():
     # serves templates/help.html
     return render_template('help.html')
 
+TARGET_URL = os.getenv("TARGET_URL", "http://127.0.0.1:7070/healthz")
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 10))   # seconds between probes
+HISTORY_SIZE = int(os.getenv("HISTORY_SIZE", 200))    # number of samples to keep
+
+history = deque(maxlen=HISTORY_SIZE)
+
+def poller():
+    """Background thread that polls TARGET_URL and appends ms or None to history."""
+    logger.info("Poller thread running, target=%s", TARGET_URL)
+    while True:
+        t0 = time.time()
+        try:
+            r = requests.get(TARGET_URL, timeout=6)
+            rt = int((time.time() - t0) * 1000)
+            if r.ok:
+                history.append(rt)
+                logger.info("Probe ok: %sms (history=%d)", rt, len(history))
+            else:
+                history.append(None)
+                logger.warning("Probe returned status %s (history=%d)", r.status_code, len(history))
+        except Exception as e:
+            history.append(None)
+            logger.exception("Poller exception (appending None). History size=%d", len(history))
+        time.sleep(POLL_INTERVAL)
+
+
+@app.route('/status_history')
+def status_history():
+    """Return the recent probe history as JSON: { history: [ms|null, ...] }"""
+    resp = make_response(jsonify({"history": list(history)}), 200)
+    resp.headers['Access-Control-Allow-Origin'] = '*'   # allow client fetch from other origins
+    return resp
+
+
 # Run in a separate thread
 import threading
 threading.Thread(target=lambda: app.run(host='0.0.0.0', port=7070), daemon=True).start()
+
+threading.Thread(target=poller, daemon=True).start()
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 HELP_TEXT = (TEMPLATES_DIR / "help.html").read_text(encoding="utf-8")
@@ -72,60 +114,44 @@ supabase_client = supabase.create_client(SUPABASE_URL, SUPABASE_KEY)
 USERNAME, PASSWORD = range(2)
 REMOVE_USERNAME = 2  # New state for removal
 
-# Configure logger
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
 MYT = timezone(timedelta(hours=8))
 
 def get_malaysia_time():
     return datetime.now(MYT)
 
 def create_driver():
-
-    chrome_options = Options()
-    
-    # Enhanced stealth options
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-    
-    # Additional stealth parameters
-    chrome_options.add_argument("--disable-web-security")
-    chrome_options.add_argument("--allow-running-insecure-content")
-    chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
-    service = Service(executable_path="/usr/local/bin/chromedriver")
-    
     try:
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        chrome_options = Options()
+        chrome_options.binary_location = "/usr/bin/google-chrome-stable"
+        # headless + container flags
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        # stealth
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+        )
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)
+        chrome_options.add_argument("--disable-web-security")
+        chrome_options.add_argument("--allow-running-insecure-content")
+        chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+        
+        service = Service(executable_path="/usr/local/bin/chromedriver")
+        driver  = webdriver.Chrome(service=service, options=chrome_options)
 
-        # Mask headless browser as normal browser
-        driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
-        })
-        driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-            'source': '''
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-            '''
-        })
         return driver
-    except Exception as e:
-        logger.error(f"Driver creation failed: {str(e)}")
-        return None
-    
-    
 
+    except Exception as e:
+        logger.error(f"Driver creation failed: {e}")
+        return None
+
+    
 def validate_credentials(username: str, password: str) -> bool:
     """Validate affiliate credentials by attempting login and return available currencies"""
     driver = create_driver()
