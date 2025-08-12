@@ -1043,7 +1043,7 @@ async def fetch_account_report(update: Update, context: ContextTypes.DEFAULT_TYP
                 await query.edit_message_text(f"*Account `{account}` not found*", parse_mode="Markdown")
                 return
             
-            await query.edit_message_text(f"*Fetching {account}...(ETA≈ 6-10s)*", parse_mode="Markdown")
+            await query.edit_message_text(f"*Fetching {account}...(ETA≈ 8-12s)*", parse_mode="Markdown")
             report_data = scrape_data(
                 creds['username'], 
                 creds['password'], 
