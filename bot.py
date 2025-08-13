@@ -24,11 +24,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 import supabase
-import os
+import os, sqlite3, datetime, threading
 from dotenv import load_dotenv
 from pathlib import Path
 from flask import Flask, Response, render_template, make_response, jsonify
-from datetime import datetime, timezone, timedelta
+from datetime import timezone, timedelta, datetime
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -37,6 +37,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+from flask import Flask, jsonify
+import psutil
+import time
+import platform
+from datetime import datetime
+
+app = Flask(__name__)
+
+START_TS = time.time()
+
+@app.route("/api/bot_info")
+def bot_info():
+    uptime_seconds = int(time.time() - START_TS)
+    uptime_str = datetime.fromtimestamp(uptime_seconds, tz=timezone.utc).strftime("%H:%M:%S")
+
+    mem = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+    return jsonify({
+        "started_at": datetime.fromtimestamp(START_TS).isoformat(sep=" ", timespec="seconds"),
+        "uptime": uptime_str,
+        "memory_mb": round(mem, 2),
+        "version": "1.0.1",  # You can set your bot version here
+        "platform": "telegram_bot"
+    })
 
 @app.route('/healthz')
 def health_check():
@@ -54,37 +77,156 @@ def help_page():
 
 TARGET_URL = os.getenv("TARGET_URL", "http://127.0.0.1:7070/healthz")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 10))   # seconds between probes
-HISTORY_SIZE = int(os.getenv("HISTORY_SIZE", 200))    # number of samples to keep
-
+HISTORY_SIZE = int(os.getenv("HISTORY_SIZE", 10000)) 
 history = deque(maxlen=HISTORY_SIZE)
+PERSIST_HISTORY = os.getenv("PERSIST_HISTORY", "true").lower() in ("1","true","yes")
+DB_PATH = os.getenv("HISTORY_DB", "history.db")   # number of samples to keep
+
+def init_db():
+    if not PERSIST_HISTORY:
+        return None
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS pings(
+                    ts INTEGER NOT NULL,
+                    ok INTEGER NOT NULL,
+                    rt INTEGER
+                 )""")
+    conn.commit()
+    return conn
+
+db_conn = init_db()
+
+def save_ping(ts, ok, rt):
+    if not PERSIST_HISTORY or db_conn is None:
+        return
+    try:
+        c = db_conn.cursor()
+        c.execute("INSERT INTO pings(ts, ok, rt) VALUES(?,?,?)", (ts, ok, rt))
+        db_conn.commit()
+    except Exception:
+        # don't crash the poller because of DB issues
+        pass
 
 def poller():
-    """Background thread that polls TARGET_URL and appends ms or None to history."""
-    logger.info("Poller thread running, target=%s", TARGET_URL)
+    """Background thread that polls TARGET_URL and appends timestamped entries to history and optionally DB."""
+    import requests, logging
+    logger = logging.getLogger("poller")
+    logger.info("Poller thread starting, target=%s", TARGET_URL)
     while True:
         t0 = time.time()
+        ts = int(t0)
+        ok = 0
+        rt_ms = None
         try:
             r = requests.get(TARGET_URL, timeout=6)
-            rt = int((time.time() - t0) * 1000)
-            if r.ok:
-                history.append(rt)
-                logger.info("Probe ok: %sms (history=%d)", rt, len(history))
-            else:
-                history.append(None)
-                logger.warning("Probe returned status %s (history=%d)", r.status_code, len(history))
-        except Exception as e:
-            history.append(None)
-            logger.exception("Poller exception (appending None). History size=%d", len(history))
+            rt_ms = int((time.time() - t0) * 1000)
+            ok = 1 if r.ok else 0
+        except Exception:
+            ok = 0
+            rt_ms = None
+        # append to in-memory history
+        history.append({"ts": ts, "ok": ok, "rt": rt_ms})
+        # persist
+        save_ping(ts, ok, rt_ms)
         time.sleep(POLL_INTERVAL)
 
+# start poller thread (ensure to start it once when app starts)
+t = threading.Thread(target=poller, daemon=True)
+t.start()
 
+# raw history endpoint (keeps backward compatibility)
 @app.route('/status_history')
 def status_history():
-    """Return the recent probe history as JSON: { history: [ms|null, ...] }"""
     resp = make_response(jsonify({"history": list(history)}), 200)
-    resp.headers['Access-Control-Allow-Origin'] = '*'   # allow client fetch from other origins
+    resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
 
+# helper: compute daily aggregates (reads DB if present, otherwise in-memory history)
+def compute_daily_aggregates(days=90, tz_offset_hours=0):
+    """Return list of (date_iso, ok_count, total_count, pct_ok) for last `days` days (inclusive of today)."""
+    now = int(time.time())
+    start_day_ts = now - days * 86400
+    # initialize per-day buckets (UTC)
+    result = []
+    # build day boundaries (UTC dates)
+    today = datetime.fromtimestamp(now, tz=timezone.utc).date()
+    days_list = [(today - timedelta(days=i)) for i in range(days-1, -1, -1)]  # oldest -> newest
+
+    # prepare counts
+    counts = {d.isoformat(): {"ok":0, "total":0} for d in days_list}
+
+    if PERSIST_HISTORY and db_conn is not None:
+        # read from sqlite
+        c = db_conn.cursor()
+        cutoff = int(time.time()) - days * 86400
+        for row in c.execute("SELECT ts, ok FROM pings WHERE ts >= ? ORDER BY ts ASC", (cutoff,)):
+            ts, ok = row
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+            if dt in counts:
+                counts[dt]["total"] += 1
+                counts[dt]["ok"] += int(ok)
+    else:
+        # read from in-memory deque
+        for item in list(history):
+            ts = item.get("ts")
+            ok = item.get("ok", 0)
+            if ts is None or ts < start_day_ts:
+                continue
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+            if dt in counts:
+                counts[dt]["total"] += 1
+                counts[dt]["ok"] += int(ok)
+
+    # create result array with percent (0-100)
+    for d in days_list:
+        key = d.isoformat()
+        total = counts[key]["total"]
+        ok = counts[key]["ok"]
+        pct = (ok/total)*100 if total>0 else None
+        result.append({"date": key, "ok": ok, "total": total, "percent": pct})
+    return result
+
+@app.route('/api/daily_status')
+def api_daily_status():
+    """Return a visavail-style dataset for the last N days.
+       Query: ?days=90
+    """
+    from flask import request
+    days = int(request.args.get("days", 90))
+    agg = compute_daily_aggregates(days=days)
+
+    # map percent -> category key
+    # categories: 'up' (green), 'degraded' (yellow), 'down' (red), 'no_data' (gray)
+    data_rows = []
+    for day in agg:
+        start = day["date"]
+        end_dt = datetime.fromisoformat(start) + timedelta(days=1)
+        end = end_dt.strftime("%Y-%m-%d")
+        pct = day["percent"]
+        if pct is None:
+            cat = "no_data"
+        elif pct >= 99.99:
+            cat = "up"
+        elif pct >= 98.0:
+            cat = "degraded"
+        else:
+            cat = "down"
+        data_rows.append([start, cat, end, (pct if pct is not None else -1)])  # we add percent as 4th element for tooltip usage
+
+    dataset = [{
+        "measure": "e2dashboard_status",
+        "data": data_rows,
+        "categories": {
+            "up": {"class": "rect_has_data", "tooltip_html": "<b>UP</b>"},
+            "degraded": {"class": "rect_partial", "tooltip_html": "<b>DEGRADED</b>"},
+            "down": {"class": "rect_has_no_data", "tooltip_html": "<b>DOWN</b>"},
+            "no_data": {"class": "rect_no_data", "tooltip_html": "<b>NO DATA</b>"}
+        }
+    }]
+    resp = make_response(jsonify(dataset), 200)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
 
 # Run in a separate thread
 import threading
@@ -123,7 +265,6 @@ def create_driver():
     try:
         
         chrome_options = Options()
-        chrome_options.binary_location = "/usr/bin/google-chrome-stable"
         # headless + container flags
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
@@ -142,7 +283,7 @@ def create_driver():
         chrome_options.add_argument("--allow-running-insecure-content")
         chrome_options.add_argument("--disable-features=IsolateOrigins,site-per-process")
         
-        service = Service(executable_path="/usr/local/bin/chromedriver")
+        service = Service(ChromeDriverManager().install())
         driver  = webdriver.Chrome(service=service, options=chrome_options)
 
         return driver

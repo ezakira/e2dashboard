@@ -6,3 +6,4 @@ python-dotenv==1.1.0
 flask
 urllib3
 requests
+psutil
