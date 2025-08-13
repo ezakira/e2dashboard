@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>e2Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Audiowide&display=swap" rel="stylesheet">
+  <link rel="icon" href="https://github.com/ezakira/e2dashboard/blob/76178b6837d0ba417f4da01c24e58892cf7da6a6/templates/e2dbbot.png"/>
+  <style>
+    :root{
+      /* base (dark) theme vars */
+      --bg: #071018;
+      --panel: #0b1114;
+      --text: #e6eef6;
+      --accent: #00c875; /* Dashboard green */
+      --service-color: #d4e0df; /* service label in dark */
+      --tile-w: 6px;
+      --tile-h: 22px;
+      --gap: 2px;
+      --card-radius: 12px;
+      --card-padding: 18px;
+      --shadow: 0 6px 18px rgba(0,0,0,0.6);
+      --btn-bg: rgba(255,255,255,0.03);
+      --btn-border: rgba(255,255,255,0.06);
+      --btn-size: 40px;
+    }
+
+    /* light theme overrides */
+    :root[data-theme="light"]{
+      --bg: #ffffff;
+      --panel: #f6fff6;
+      --text: #002b21;
+      --accent: #00c875;
+      --service-color: rgb(34, 34, 34);
+      --btn-bg: rgba(0,0,0,0.04);
+      --btn-border: rgba(0,0,0,0.06);
+    }
+
+    /* Fixed position elements with blur */
+    .new-items-bottom-left,
+    .service-badge,
+    .site-link-bottom-right {
+      backdrop-filter: blur(4px);
+    }
+
+    /* hide-cursor class (applied to root) */
+    .hide-cursor #visavailContainer,
+    .hide-cursor #fallbackTiles,
+    .hide-cursor #chart {
+      cursor: default !important;
+    }
+
+    /* ensure interactive controls still show the hand pointer */
+    .icon-btn,
+    a,
+    .site-link-bottom-right,
+    .service-links a {
+      cursor: pointer;
+    }
+
+    /* page base */
+    html,body{height:100%;margin:0;padding:0;font-family:'Audiowide',sans-serif;background:var(--bg);color:var(--text);}
+    body{display:flex;align-items:flex-start;justify-content:center;padding:36px 16px;box-sizing:border-box;position:relative;}
+
+    /* container: limits width and centers the main card */
+    .container{width:min(1100px,100%);}
+
+    /* header */
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;}
+    .title-area{display:flex;align-items:center;gap:12px}
+    .title-img{height:48px;width:auto;border-radius:8px;object-fit:cover}
+    h1{margin:0;font-size:clamp(18px,3.2vw,32px);line-height:1;text-transform:lowercase;color:var(--service-color);}
+    .subtitle{margin-left:8px;color:var(--accent);font-size:clamp(12px,1.4vw,16px);text-transform:none;font-weight:bold;}
+
+    /* controls (top-right icons) */
+    .controls{display:flex;gap:10px;align-items:center}
+    .icon-btn{
+      width:var(--btn-size); height:var(--btn-size); display:inline-grid; place-items:center;
+      border-radius:14px; background:var(--btn-bg); border:1px solid var(--btn-border);
+      cursor:pointer; color:var(--text); padding:0;
+    }
+    .icon-btn svg{width:18px;height:18px;display:block}
+    .icon-btn:active{transform:translateY(1px)}
+    .icon-btn:hover{ transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.15); }
+    .icon-bar{display:flex;gap:8px}
+
+    /* the main status card */
+    .card{background:var(--panel);padding:var(--card-padding);border-radius:var(--card-radius);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+    .row{display:flex;align-items:center;gap:14px}
+    .measure{min-width:220px;font-size:clamp(12px,1.1vw,16px);text-transform:lowercase;color:var(--text);opacity:0.95}
+    .uptxt{margin-left:auto;color:var(--accent);font-weight:700;font-size:clamp(14px,1.6vw,20px);}
+
+    /* tile grid when Visavail is not available */
+    .tiles{display:flex;gap:var(--gap);align-items:center;overflow:hidden;padding:6px 0;flex-wrap:nowrap;}
+    .tile{width:var(--tile-w);height:var(--tile-h);border-radius:3px;background:#1b2b2a;box-shadow: inset 0 -2px 0 rgba(0,0,0,0.2);position:relative}
+    .tile.up{background:#15eb80}
+    .tile.degraded{background:#fde338}
+    .tile.down{background:#fa443b}
+    .tile.no_data{background:#2b2f36}
+    .tile:hover::after{
+      content: attr(data-tip);
+      position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 8px);
+      background:var(--panel);padding:6px 8px;border-radius:6px;border:1px solid rgba(0,0,0,0.3);font-size:12px;white-space:nowrap;color:var(--text);
+    }
+
+    /* legend */
+    .legend{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap}
+    .leg{display:flex;gap:6px;align-items:center;font-size:13px;text-transform:lowercase}
+    .sw{width:12px;height:12px;border-radius:3px}
+
+    /* Bot stats panel - optimized for mobile */
+    .new-items-bottom-left {
+      position: fixed;
+      left: 18px;
+      top: 75%;
+      transform: translateY(-50%);
+      z-index: 65;
+      color: var(--service-color);
+      font-size: clamp(10px, 1.2vw, 14px); /* Match service badge sizing */
+      text-transform: lowercase;
+      background: transparent;
+      padding: 10px 12px; /* Match service badge padding */
+      border-radius: 8px;
+      pointer-events: auto;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+
+    /* Service badge */
+    .service-badge {
+      position: fixed;
+      left: 18px;
+      bottom: 18px;
+      background: transparent;
+      color: var(--service-color);
+      font-size: clamp(10px,1.2vw,14px);
+      text-transform:lowercase;
+      padding:10px 12px;
+      border-radius:8px;
+      pointer-events:auto;
+      z-index:60;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      align-items:flex-start;
+    }
+
+    .service-line{font-size:0.95em}
+    .service-links{display:flex;gap:10px;align-items:center}
+
+    /* Telegram icon */
+    .tg-icon{width:18px;height:18px;display:inline-block;vertical-align:middle}
+
+    /* Bottom-right domain link */
+    .site-link-bottom-right{
+      position:fixed;
+      right:18px;
+      bottom:18px;
+      z-index:70;
+      color:var(--service-color);
+      font-size:clamp(10px,1.2vw,14px);
+      text-transform:lowercase;
+      text-decoration:none;
+      background:transparent;
+      padding:8px 10px;
+      border-radius:8px;
+      pointer-events:auto;
+    }
+
+    /* Mobile responsiveness */
+    @media (max-width: 700px) {
+      body { padding: 20px 10px; }
+      .container { width: 100%; }
+      .card { padding: 14px; }
+      
+      /* Bot stats panel adjustments */
+      .new-items-bottom-left {
+        left: 12px;
+        padding: 8px 10px;
+        max-width: 45vw;
+        font-size: clamp(9px, 1.8vw, 12px);
+      }
+      
+      .service-badge {
+        left: 12px;
+        bottom: 12px;
+        padding: 8px 10px;
+      }
+      
+      .site-link-bottom-right { 
+        right: 12px; 
+        bottom: 12px; 
+      }
+    }
+
+    @media (max-width: 480px) {
+      :root {
+        --tile-w: 4px;
+        --tile-h: 14px;
+        --gap: 1px;
+      }
+      
+      .measure { min-width: 120px; }
+      
+      /* Further optimize bot stats panel */
+      .new-items-bottom-left {
+        left: 8px;
+        padding: 6px 8px;
+        max-width: 50vw;
+        font-size: clamp(8px, 2.2vw, 10px);
+        line-height: 1.4;
+      }
+    }
+
+    @media (max-width: 360px) {
+      .new-items-bottom-left {
+        max-width: 55vw;
+        font-size: clamp(7px, 2.5vw, 9px);
+        padding: 4px 6px;
+      }
+    }
+
+    /* Graph container */
+    #visavailContainer {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Small utility */
+    a { color: inherit; text-decoration: none; }
+    
+    /* Custom scrollbar for the entire page */
+    body::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    
+    body::-webkit-scrollbar-track {
+      background: var(--panel);
+    }
+    
+    body::-webkit-scrollbar-thumb {
+      background: var(--accent);
+      border-radius: 3px;
+    }
+    
+    body::-webkit-scrollbar-thumb:hover {
+      background: #00a166;
+    }
+    
+    /* Scrollable container for bot stats on small screens */
+    .scrollable-container {
+      max-height: 70vh;
+      overflow-y: auto;
+      padding-right: 10px;
+    }
+    
+    /* Hide scrollbar when not needed */
+    @media (min-width: 1024px) {
+      .scrollable-container {
+        overflow-y: visible;
+        max-height: none;
+        padding-right: 0;
+      }
+    }
+    
+    /* Bold text styles */
+    .subtitle { font-weight: bold; }
+    #mainCard { font-weight: bold; }
+    #bot-stats { font-weight: bold; }
+    #website { font-weight: bold; }
+    
+    /* Overlap prevention */
+    .overlap-guard {
+      position: relative;
+      z-index: 50;
+    }
+  </style>
+</head>
+<body>
+  <div class="container overlap-guard">
+    <header>
+      <div class="title-area">
+        <div>
+          <h1>e2<span class="subtitle">Dashboard</span></h1>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="icon-bar" role="toolbar" aria-label="page controls">
+          <button id="themeBtn" class="icon-btn" title="Toggle theme" aria-label="toggle theme">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+            </svg>
+          </button>
+
+          <button id="refreshBtn" class="icon-btn" title="Refresh status" aria-label="refresh status">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0114.13-3.36L23 10"></path>
+              <path d="M20.49 15a9 9 0 01-14.13 3.36L1 14"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="card" id="mainCard">
+      <div class="row">
+        <div class="measure">e2dashboard_status</div>
+        <div class="uptxt" id="uptxt">Calculating...</div>
+      </div>
+
+      <div id="visavailContainer" style="margin-top:4px"></div>
+      <div id="fallbackTiles" class="tiles" style="margin-top:6px"></div>
+
+      <div class="legend">
+        <div class="leg"><div class="sw" style="background:#15eb80"></div>up</div>
+        <div class="leg"><div class="sw" style="background:#fde338"></div>degraded</div>
+        <div class="leg"><div class="sw" style="background:#fa443b"></div>down</div>
+        <div class="leg"><div class="sw" style="background:#2b2f36"></div>dead</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scrollable-container">
+    <div class="new-items-bottom-left" id="bot-stats">
+      Loading bot info...
+    </div>
+  </div>
+  
+  <div class="service-badge" id="serviceBadge">
+    <div class="service-line"><strong>service: e2dashboard_status</strong></div>
+    <div class="service-links">
+      <a href="https://t.me/e2dashboardbot"
+         title="@e2dashboardbot"
+         target="_blank"
+         rel="noopener noreferrer"
+         style="display:flex;align-items:center;gap:6px;color:var(--service-color);">
+        <svg class="tg-icon" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path fill="#00A7E1" d="M120 0c66.274 0 120 53.726 120 120s-53.726 120-120 120S0 186.274 0 120 53.726 0 120 0z"/>
+          <path fill="#ffffff" d="M178.6 77.3l-20.9 98.3c-1.6 6.7-5.9 8.2-11.9 5.1l-32.7-24.1-15.8 15.2c-1.8 1.8-3.3 3.3-6.7 3.3l2.4-34.2 62.2-56.1c2.7-2.4-.6-3.8-4.1-1.4L94.7 121.8 66.1 110.3c-6.5-2.6-6.6-6.5 1.4-9.6l100.7-38.8c4.6-1.8 8.6 1.1 6.4 9.4z"/>
+        </svg>
+        <span style="font-size:0.95em; font-weight: bold; color:var(--service-color)">e2dashboard</span>
+      </a>
+    </div>
+  </div>
+  
+  <a class="site-link-bottom-right" id="website" href="https://e2bet.com" target="_blank" rel="noopener noreferrer">e2bet.com</a>
+
+  <script src="https://cdn.jsdelivr.net/gh/flrs/visavail@master/visavail.min.js"></script>
+  <script>
+  const DAYS = 90;
+  const API = '/api/daily_status?days=' + DAYS;
+  const uptxt = document.getElementById('uptxt');
+  const container = document.getElementById('visavailContainer');
+  const fallback = document.getElementById('fallbackTiles');
+  const themeBtn = document.getElementById('themeBtn');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const root = document.documentElement;
+
+  // Render fallback tiles when visavail is not available
+  function renderFallback(dataset) {
+    fallback.innerHTML = '';
+    const dd = dataset[0].data;
+    let totalPct = 0, countPct = 0;
+    dd.forEach(item => {
+      const start = item[0], cat = item[1], pct = item[3];
+      const tile = document.createElement('div');
+      tile.className = 'tile ' + cat;
+      const pctText = (pct === -1 || pct === null) ? 'no data' : (typeof pct === 'number' ? (pct.toFixed(2)+'%') : pct + '%');
+      tile.setAttribute('data-tip', `${start}: ${pctText}`);
+      fallback.appendChild(tile);
+      if (pct && pct !== -1) { totalPct += pct; countPct++; }
+    });
+    const avg = countPct ? (totalPct/countPct) : 0;
+    uptxt.textContent = countPct ? (avg.toFixed(2) + '% average') : 'No data yet';
+  }
+  
+  // Fetch bot info and update stats panel
+  async function fetchBotInfo() {
+    const t0 = performance.now();
+    try {
+      const res = await fetch("/api/bot_info");
+      const latency = (performance.now() - t0).toFixed(0) + " ms";
+      if (!res.ok) throw new Error("API error");
+      const data = await res.json();
+      
+      // Format bot info for display
+      document.getElementById("bot-stats").innerHTML = `
+        <b>memory: ${data.memory_mb} MB</b><br>
+        <b>latency: <span style="color: var(--accent);">${latency}</span></b><br>
+        <b>version: ${data.version}</b><br>
+        <b>uptime: ${data.uptime}</b><br>
+        <b>started_at: ${data.started_at}</b><br>
+        <b>platform: ${data.platform}</b><br>
+      `;
+    } catch (err) {
+      document.getElementById("bot-stats").innerHTML = "Failed to fetch bot info.";
+    }
+  }
+
+  // Fetch and render status data
+  async function fetchAndRender() {
+    try {
+      const r = await fetch(API);
+      const dataset = await r.json();
+      
+      // Attempt to use visavail for graph rendering
+      if ((typeof visavail !== 'undefined' && visavail.init) || (typeof Visavail !== 'undefined')) {
+        try {
+          container.innerHTML = '<div id="chart" style="width:100%"></div>';
+          const el = document.getElementById('chart');
+          el.setAttribute('data-data-set', JSON.stringify(dataset));
+          
+          // Library initialization variations
+          if (window.HSVisavailTimeline && window.HSVisavailTimeline.init) {
+            window.HSVisavailTimeline.init('#chart');
+          } else if (window.HSCore && HSCore.components && HSCore.components.HSVisavailTimeline) {
+            HSCore.components.HSVisavailTimeline.init('#chart');
+          } else if (typeof visavail !== 'undefined' && visavail.init) {
+            visavail.init('#chart', {});
+          }
+          
+          // Fallback if library doesn't render
+          setTimeout(() => {
+            if (!container.querySelector('svg') && !container.querySelector('.visavail')) {
+              renderFallback(dataset);
+            }
+          }, 300);
+        } catch (e) {
+          console.warn('visavail init failed', e);
+          renderFallback(dataset);
+        }
+      } else {
+        renderFallback(dataset);
+      }
+    } catch (e) {
+      console.error(e);
+      uptxt.textContent = 'Error loading status';
+    }
+  }
+
+  // Function to set theme
+  function setTheme(theme) {
+  if (theme === 'light') {
+    root.setAttribute('data-theme', 'light');  // Changed body to root
+    localStorage.setItem('dashboardTheme', 'light');
+  } else {
+    root.removeAttribute('data-theme');        // Changed body to root
+    localStorage.setItem('dashboardTheme', 'dark');
+  }
+  // Keep the transition code
+  body.classList.add('theme-transition');
+  setTimeout(() => {
+    body.classList.remove('theme-transition');
+  }, 400);
+}
+  // Theme toggle functionality
+  function toggleTheme() {
+  const current = root.getAttribute('data-theme');
+  if (current === 'light') {
+    root.removeAttribute('data-theme');
+    localStorage.setItem('dashboardTheme', 'dark');
+  } else {
+    root.setAttribute('data-theme','light');
+    localStorage.setItem('dashboardTheme', 'light');
+  }
+}
+  function loadTheme() {
+      const savedTheme = localStorage.getItem('dashboardTheme');
+      if (savedTheme === 'light') {
+        setTheme('light');
+      } else {
+        setTheme('dark');
+      }
+    }
+    
+    // Initialize theme on page load
+  document.addEventListener('DOMContentLoaded', loadTheme);
+  
+  // Hide cursor toggle functionality
+  let cursorHidden = false;
+  function setCursorHidden(hidden) {
+    if (hidden) root.classList.add('hide-cursor');
+    else root.classList.remove('hide-cursor');
+  }
+
+  // Event listeners
+  themeBtn.addEventListener('click', toggleTheme);
+  refreshBtn.addEventListener('click', fetchAndRender);
+  
+  document.addEventListener('click', (ev) => {
+    if (ev.target.closest('.service-links') || 
+        ev.target.closest('.icon-btn') || 
+        ev.target.closest('.site-link-bottom-right')) return;
+    cursorHidden = !cursorHidden;
+    setCursorHidden(cursorHidden);
+  });
+
+  document.addEventListener('dblclick', () => { 
+    cursorHidden = false; 
+    setCursorHidden(false); 
+  });
+  
+  document.addEventListener('keydown', (e) => { 
+    if (e.key === 'Escape') { 
+      cursorHidden = false; 
+      setCursorHidden(false); 
+    } 
+  });
+
+  // Initial setup
+  fetchBotInfo();
+  setInterval(fetchBotInfo, 10000);
+  fetchAndRender();
+  setInterval(fetchAndRender, 30000);
+  
+  // Overlap prevention
+  function checkOverlap() {
+    const botStats = document.querySelector('.new-items-bottom-left');
+    const mainCard = document.querySelector('.card');
+    
+    if (!botStats || !mainCard) return;
+    
+    const botRect = botStats.getBoundingClientRect();
+    const cardRect = mainCard.getBoundingClientRect();
+    
+    // Check if the bot stats panel overlaps with the main card
+    if (botRect.right > cardRect.left && botRect.left < cardRect.right &&
+        botRect.bottom > cardRect.top && botRect.top < cardRect.bottom) {
+      // Apply scrollable container styles
+      document.querySelector('.scrollable-container').style.maxHeight = '200px';
+    } else {
+      // Reset scrollable container
+      document.querySelector('.scrollable-container').style.maxHeight = '70vh';
+    }
+  }
+  
+  // Check for overlap periodically and on resize
+  setInterval(checkOverlap, 500);
+  window.addEventListener('resize', checkOverlap);
+  </script>
+</body>
+</html>
