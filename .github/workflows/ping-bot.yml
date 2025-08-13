@@ -89,11 +89,7 @@ jobs:
           echo "---- docs/status.json ----"
           sed -n '1,200p' docs/status.json || true
 
-      - name: Pull latest changes from remote
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
+      
 
       - name: Commit updated docs JSON files
         uses: EndBug/add-and-commit@v9
