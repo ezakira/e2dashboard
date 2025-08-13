@@ -29,6 +29,10 @@ from dotenv import load_dotenv
 from pathlib import Path
 from flask import Flask, Response, render_template, make_response, jsonify
 from datetime import timezone, timedelta, datetime
+from flask_cors import CORS
+
+
+
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -37,6 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 from flask import Flask, jsonify
 import psutil
 import time
@@ -53,13 +58,16 @@ def bot_info():
     uptime_str = datetime.fromtimestamp(uptime_seconds, tz=timezone.utc).strftime("%H:%M:%S")
 
     mem = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
-    return jsonify({
+    data = {
         "started_at": datetime.fromtimestamp(START_TS).isoformat(sep=" ", timespec="seconds"),
         "uptime": uptime_str,
         "memory_mb": round(mem, 2),
         "version": "1.0.1",  # You can set your bot version here
         "platform": "telegram_bot"
-    })
+    }
+    resp = make_response(jsonify(data), 200)
+    resp.headers['Access-Control-Allow-Origin'] = '*'   # allow all origins (safe for public read-only APIs)
+    return resp
 
 @app.route('/healthz')
 def health_check():
