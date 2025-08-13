@@ -275,6 +275,15 @@
       position: relative;
       z-index: 50;
     }
+
+    /* small live badge */
+    .live-badge {
+      display:inline-block;
+      margin-left:8px;
+      font-weight:700;
+      color:var(--accent);
+      font-size:0.85em;
+    }
   </style>
 </head>
 <body>
@@ -331,7 +340,7 @@
   </div>
   
   <div class="service-badge" id="serviceBadge">
-    <div class="service-line"><strong>service: e2dashboard_status</strong></div>
+    <div class="service-line"><strong>service: e2dashboard_status</strong><span id="liveBadgeContainer"></span></div>
     <div class="service-links">
       <a href="https://t.me/e2dashboardbot"
          title="@e2dashboardbot"
@@ -352,17 +361,32 @@
   <script src="https://cdn.jsdelivr.net/gh/flrs/visavail@master/visavail.min.js"></script>
   <script>
   const DAYS = 90;
-  const API = '/api/daily_status?days=' + DAYS;
+
+  // If you host your Flask API at a public domain, set LIVE_API_BASE to e.g.
+  // const LIVE_API_BASE = 'https://api.yourdomain.com';
+  // For GitHub Pages (static) leave it empty '' so it will fall back to local JSON.
+  const LIVE_API_BASE = ''; // <-- set this when your API is public
+
+  const API = (LIVE_API_BASE ? (LIVE_API_BASE + '/api/daily_status?days=' + DAYS) : '/api/daily_status?days=' + DAYS);
+  const FALLBACK_API = './status.json';
+  const BOTINFO_API = (LIVE_API_BASE ? (LIVE_API_BASE + '/api/bot_info') : '/api/bot_info');
+  const BOTINFO_FALLBACK = './bot_info.json';
+
   const uptxt = document.getElementById('uptxt');
   const container = document.getElementById('visavailContainer');
   const fallback = document.getElementById('fallbackTiles');
   const themeBtn = document.getElementById('themeBtn');
   const refreshBtn = document.getElementById('refreshBtn');
   const root = document.documentElement;
+  const body = document.body; // used for transition
 
   // Render fallback tiles when visavail is not available
   function renderFallback(dataset) {
     fallback.innerHTML = '';
+    if (!dataset || !dataset[0] || !Array.isArray(dataset[0].data)) {
+      uptxt.textContent = 'No data';
+      return;
+    }
     const dd = dataset[0].data;
     let totalPct = 0, countPct = 0;
     dd.forEach(item => {
@@ -377,17 +401,54 @@
     const avg = countPct ? (totalPct/countPct) : 0;
     uptxt.textContent = countPct ? (avg.toFixed(2) + '% average') : 'No data yet';
   }
-  
-  // Fetch bot info and update stats panel
+
+  // Reusable visavail/render function (works for both live and fallback datasets)
+  function renderDatasetOrFallback(dataset) {
+    try {
+      // Attempt to use visavail for graph rendering
+      if ((typeof visavail !== 'undefined' && visavail.init) || (typeof Visavail !== 'undefined')) {
+        container.innerHTML = '<div id="chart" style="width:100%"></div>';
+        const el = document.getElementById('chart');
+        el.setAttribute('data-data-set', JSON.stringify(dataset));
+
+        // Library initialization variations
+        if (window.HSVisavailTimeline && window.HSVisavailTimeline.init) {
+          window.HSVisavailTimeline.init('#chart');
+        } else if (window.HSCore && HSCore.components && HSCore.components.HSVisavailTimeline) {
+          HSCore.components.HSVisavailTimeline.init('#chart');
+        } else if (typeof visavail !== 'undefined' && visavail.init) {
+          visavail.init('#chart', {});
+        }
+
+        // Fallback if library doesn't render
+        setTimeout(() => {
+          if (!container.querySelector('svg') && !container.querySelector('.visavail')) {
+            renderFallback(dataset);
+          }
+        }, 300);
+      } else {
+        renderFallback(dataset);
+      }
+    } catch (e) {
+      console.warn('renderDatasetOrFallback failed', e);
+      renderFallback(dataset);
+    }
+  }
+
+  // Fetch bot info and update stats panel (tries live -> fallback)
   async function fetchBotInfo() {
     const t0 = performance.now();
+    const liveBadgeContainer = document.getElementById('liveBadgeContainer');
+    // remove any previous live badge
+    liveBadgeContainer.innerHTML = '';
     try {
-      const res = await fetch("/api/bot_info");
-      const latency = (performance.now() - t0).toFixed(0) + " ms";
-      if (!res.ok) throw new Error("API error");
+      // try live endpoint first (may be cross-origin)
+      const res = await fetch(BOTINFO_API, {cache: "no-store", mode: 'cors'});
+      if (!res.ok) throw new Error("live bot_info not available");
       const data = await res.json();
-      
-      // Format bot info for display
+      const latency = (performance.now() - t0).toFixed(0) + " ms";
+      // show live badge
+      liveBadgeContainer.innerHTML = '<span class="live-badge">live</span>';
       document.getElementById("bot-stats").innerHTML = `
         <b>memory: ${data.memory_mb} MB</b><br>
         <b>latency: <span style="color: var(--accent);">${latency}</span></b><br>
@@ -397,89 +458,88 @@
         <b>platform: ${data.platform}</b><br>
       `;
     } catch (err) {
-      document.getElementById("bot-stats").innerHTML = "Failed to fetch bot info.";
+      // fallback to local JSON in the repo (works on GitHub Pages)
+      try {
+        const res2 = await fetch(BOTINFO_FALLBACK);
+        const data2 = await res2.json();
+        document.getElementById("bot-stats").innerHTML = `
+          <b>memory: ${data2.memory_mb}MB</b><br>
+          <b>version: ${data2.version}</b><br>
+          <b>uptime: ${data2.uptime}</b><br>
+          <b>started_at: ${data2.started_at}</b><br>
+          <b>platform: ${data2.platform}</b><br>
+          <b>(static fallback)</b>
+        `;
+      } catch (err2) {
+        document.getElementById("bot-stats").innerHTML = "Failed to fetch bot info.";
+      }
     }
   }
 
-  // Fetch and render status data
+  // Fetch and render status data (tries live -> fallback)
   async function fetchAndRender() {
     try {
-      const r = await fetch(API);
+      // Try live API
+      const r = await fetch(API, {cache: "no-store", mode: 'cors'});
+      if (!r.ok) throw new Error('live API returned ' + r.status);
       const dataset = await r.json();
-      
-      // Attempt to use visavail for graph rendering
-      if ((typeof visavail !== 'undefined' && visavail.init) || (typeof Visavail !== 'undefined')) {
-        try {
-          container.innerHTML = '<div id="chart" style="width:100%"></div>';
-          const el = document.getElementById('chart');
-          el.setAttribute('data-data-set', JSON.stringify(dataset));
-          
-          // Library initialization variations
-          if (window.HSVisavailTimeline && window.HSVisavailTimeline.init) {
-            window.HSVisavailTimeline.init('#chart');
-          } else if (window.HSCore && HSCore.components && HSCore.components.HSVisavailTimeline) {
-            HSCore.components.HSVisavailTimeline.init('#chart');
-          } else if (typeof visavail !== 'undefined' && visavail.init) {
-            visavail.init('#chart', {});
-          }
-          
-          // Fallback if library doesn't render
-          setTimeout(() => {
-            if (!container.querySelector('svg') && !container.querySelector('.visavail')) {
-              renderFallback(dataset);
-            }
-          }, 300);
-        } catch (e) {
-          console.warn('visavail init failed', e);
-          renderFallback(dataset);
-        }
-      } else {
-        renderFallback(dataset);
-      }
+      // mark live badge
+      document.getElementById('liveBadgeContainer').innerHTML = '<span class="live-badge">live</span>';
+      renderDatasetOrFallback(dataset);
     } catch (e) {
-      console.error(e);
-      uptxt.textContent = 'Error loading status';
+      // fallback to local file
+      try {
+        const r2 = await fetch(FALLBACK_API);
+        const dataset2 = await r2.json();
+        // remove live badge because using static fallback
+        document.getElementById('liveBadgeContainer').innerHTML = '';
+        renderDatasetOrFallback(dataset2);
+      } catch (e2) {
+        console.error('both live and fallback failed', e2);
+        uptxt.textContent = 'Error loading status';
+      }
     }
   }
 
   // Function to set theme
   function setTheme(theme) {
-  if (theme === 'light') {
-    root.setAttribute('data-theme', 'light');  // Changed body to root
-    localStorage.setItem('dashboardTheme', 'light');
-  } else {
-    root.removeAttribute('data-theme');        // Changed body to root
-    localStorage.setItem('dashboardTheme', 'dark');
+    if (theme === 'light') {
+      root.setAttribute('data-theme', 'light');
+      localStorage.setItem('dashboardTheme', 'light');
+    } else {
+      root.removeAttribute('data-theme');
+      localStorage.setItem('dashboardTheme', 'dark');
+    }
+    // Keep the transition code
+    body.classList.add('theme-transition');
+    setTimeout(() => {
+      body.classList.remove('theme-transition');
+    }, 400);
   }
-  // Keep the transition code
-  body.classList.add('theme-transition');
-  setTimeout(() => {
-    body.classList.remove('theme-transition');
-  }, 400);
-}
+
   // Theme toggle functionality
   function toggleTheme() {
-  const current = root.getAttribute('data-theme');
-  if (current === 'light') {
-    root.removeAttribute('data-theme');
-    localStorage.setItem('dashboardTheme', 'dark');
-  } else {
-    root.setAttribute('data-theme','light');
-    localStorage.setItem('dashboardTheme', 'light');
-  }
-}
-  function loadTheme() {
-      const savedTheme = localStorage.getItem('dashboardTheme');
-      if (savedTheme === 'light') {
-        setTheme('light');
-      } else {
-        setTheme('dark');
-      }
+    const current = root.getAttribute('data-theme');
+    if (current === 'light') {
+      root.removeAttribute('data-theme');
+      localStorage.setItem('dashboardTheme', 'dark');
+    } else {
+      root.setAttribute('data-theme','light');
+      localStorage.setItem('dashboardTheme', 'light');
     }
-    
-    // Initialize theme on page load
+  }
+
+  function loadTheme() {
+    const savedTheme = localStorage.getItem('dashboardTheme');
+    if (savedTheme === 'light') {
+      setTheme('light');
+    } else {
+      setTheme('dark');
+    }
+  }
+  // Initialize theme on page load
   document.addEventListener('DOMContentLoaded', loadTheme);
-  
+
   // Hide cursor toggle functionality
   let cursorHidden = false;
   function setCursorHidden(hidden) {
@@ -490,25 +550,25 @@
   // Event listeners
   themeBtn.addEventListener('click', toggleTheme);
   refreshBtn.addEventListener('click', fetchAndRender);
-  
+
   document.addEventListener('click', (ev) => {
-    if (ev.target.closest('.service-links') || 
-        ev.target.closest('.icon-btn') || 
+    if (ev.target.closest('.service-links') ||
+        ev.target.closest('.icon-btn') ||
         ev.target.closest('.site-link-bottom-right')) return;
     cursorHidden = !cursorHidden;
     setCursorHidden(cursorHidden);
   });
 
-  document.addEventListener('dblclick', () => { 
-    cursorHidden = false; 
-    setCursorHidden(false); 
+  document.addEventListener('dblclick', () => {
+    cursorHidden = false;
+    setCursorHidden(false);
   });
-  
-  document.addEventListener('keydown', (e) => { 
-    if (e.key === 'Escape') { 
-      cursorHidden = false; 
-      setCursorHidden(false); 
-    } 
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      cursorHidden = false;
+      setCursorHidden(false);
+    }
   });
 
   // Initial setup
@@ -516,17 +576,17 @@
   setInterval(fetchBotInfo, 10000);
   fetchAndRender();
   setInterval(fetchAndRender, 30000);
-  
+
   // Overlap prevention
   function checkOverlap() {
     const botStats = document.querySelector('.new-items-bottom-left');
     const mainCard = document.querySelector('.card');
-    
+
     if (!botStats || !mainCard) return;
-    
+
     const botRect = botStats.getBoundingClientRect();
     const cardRect = mainCard.getBoundingClientRect();
-    
+
     // Check if the bot stats panel overlaps with the main card
     if (botRect.right > cardRect.left && botRect.left < cardRect.right &&
         botRect.bottom > cardRect.top && botRect.top < cardRect.bottom) {
@@ -537,7 +597,7 @@
       document.querySelector('.scrollable-container').style.maxHeight = '70vh';
     }
   }
-  
+
   // Check for overlap periodically and on resize
   setInterval(checkOverlap, 500);
   window.addEventListener('resize', checkOverlap);
