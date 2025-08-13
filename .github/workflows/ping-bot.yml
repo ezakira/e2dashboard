@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # fetch all history so push/pull can work
+          persist-credentials: true
 
       - name: Install jq
         run: |
@@ -88,3 +91,5 @@ jobs:
           message: 'chore(actions): update bot_info and status from getMe'
           add: 'docs/bot_info.json docs/status.json'
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          fetch: true
+          pull: true
