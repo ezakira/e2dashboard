@@ -65,6 +65,21 @@ jobs:
           if [ "$curl_status" -eq 0 ] && jq -e . /tmp/tg.json >/dev/null 2>&1; then
             echo "Telegram responded with JSON; augmenting with checked_at and writing docs/bot_info.json"
             jq --arg t "$now" '. + {checked_at: $t}' /tmp/tg.json > docs/bot_info.json
+            # compute system info
+            STARTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  # or any fixed bot start timestamp
+            UPTIME=$(date -u -d "@$(( $(date +%s) - $(date -d "$STARTED_AT" +%s) ))" +"%H:%M:%S")
+            MEMORY_MB=$(ps -o rss= -p $$ | awk '{printf "%.2f", $1/1024}')
+            VERSION="1.0.1"
+            PLATFORM="telegram_bot"
+
+            jq --arg uptime "$UPTIME" \
+               --arg memory "$MEMORY_MB" \
+               --arg version "$VERSION" \
+               --arg started_at "$STARTED_AT" \
+               --arg platform "$PLATFORM" \
+               '. + {uptime:$uptime, memory:($memory|tonumber), version:$version, started_at:$started_at, platform:$platform}' \
+               docs/bot_info.json > docs/bot_info.tmp.json && mv docs/bot_info.tmp.json docs/bot_info.json
+
             ok=$(jq -r '.ok // "false"' docs/bot_info.json)
             echo "telegram ok value: $ok"
             if [ "$ok" = "true" ]; then
