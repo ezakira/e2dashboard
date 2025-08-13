@@ -15,6 +15,12 @@ jobs:
           fetch-depth: 0          # fetch all history so push/pull can work
           persist-credentials: true
 
+      - name: Sync with remote main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull origin main --rebase || true
+
       - name: Install jq
         run: |
           sudo apt-get update -y
