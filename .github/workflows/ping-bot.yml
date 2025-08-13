@@ -1,115 +1,62 @@
-name: Ping bot & update status
+name: Check Telegram getMe & publish status
 
 on:
   schedule:
-    - cron: '*/1 * * * *'    # every 5 minutes
-  workflow_dispatch:         # allow manual runs
-
-env:
-  STATUS_FILE: docs/status.json
-  BOT_INFO_FILE: docs/bot_info.json
-  BOT_HEALTH_URL: ${{ secrets.BOT_HEALTH_URL }}
-  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+    - cron: '*/1 * * * *'    # every 5 minutes (adjust if you like)
+  workflow_dispatch:         # allows manual runs from GitHub Actions UI
 
 jobs:
-  ping:
+  check-getme:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install jq (for JSON checks)
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq
-
-      - name: Ensure docs folder exists
+      - name: Ensure docs directory exists
         run: mkdir -p docs
 
-      - name: Ping BOT_HEALTH_URL (if set) and write status.json
+      - name: Call Telegram getMe
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         run: |
           now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          echo "checked_at: $now"
-          if [ -n "${BOT_HEALTH_URL}" ]; then
-            echo "Pinging BOT_HEALTH_URL=${BOT_HEALTH_URL}"
-            start_ms=$(date +%s%3N)
-            if curl -sS --max-time 10 -o /tmp/health_resp.json "${BOT_HEALTH_URL}"; then
-              rt_ms=$(( $(date +%s%3N) - start_ms ))
-              echo "success, rt=${rt_ms}ms"
-              # if the response is valid JSON, assume it's the visavail dataset -> copy it
-              if jq -e . /tmp/health_resp.json >/dev/null 2>&1; then
-                cp /tmp/health_resp.json "${STATUS_FILE}"
-              else
-                # not JSON -> create a minimal dataset
-                cat > "${STATUS_FILE}" <<EOF
-[{
-  "measure":"e2dashboard_status",
-  "data":[["${now}","down","${now}",-1]],
-  "categories": {
-    "up":{"class":"rect_has_data","tooltip_html":"<b>UP</b>"},
-    "degraded":{"class":"rect_partial","tooltip_html":"<b>DEGRADED</b>"},
-    "down":{"class":"rect_has_no_data","tooltip_html":"<b>DOWN</b>"},
-    "no_data":{"class":"rect_no_data","tooltip_html":"<b>NO DATA</b>"}
-  }
-}]
-EOF
-              fi
-            else
-              echo "health check failed or timed out"
-              cat > "${STATUS_FILE}" <<EOF
-[{
-  "measure":"e2dashboard_status",
-  "data":[["${now}","down","${now}",0]],
-  "categories": {
-    "up":{"class":"rect_has_data","tooltip_html":"<b>UP</b>"},
-    "degraded":{"class":"rect_partial","tooltip_html":"<b>DEGRADED</b>"},
-    "down":{"class":"rect_has_no_data","tooltip_html":"<b>DOWN</b>"},
-    "no_data":{"class":"rect_no_data","tooltip_html":"<b>NO DATA</b>"}
-  }
-}]
-EOF
-            fi
-          else
-            echo "BOT_HEALTH_URL not set — writing empty dataset"
-            cat > "${STATUS_FILE}" <<EOF
-[{
-  "measure":"e2dashboard_status",
-  "data":[],
-  "categories": {
-    "up":{"class":"rect_has_data","tooltip_html":"<b>UP</b>"},
-    "degraded":{"class":"rect_partial","tooltip_html":"<b>DEGRADED</b>"},
-    "down":{"class":"rect_has_no_data","tooltip_html":"<b>DOWN</b>"},
-    "no_data":{"class":"rect_no_data","tooltip_html":"<b>NO DATA</b>"}
-  }
-}]
-EOF
+          echo "Checking Telegram getMe at $now"
+          if [ -z "$TELEGRAM_TOKEN" ]; then
+            echo "No TELEGRAM_TOKEN provided"
+            jq -n --arg t "$now" '{ok:false, checked_at:$t, note:"TELEGRAM_TOKEN missing"}' > docs/bot_info.json
+            jq -n --arg t "$now" '[{measure:"e2dashboard_status", data:[[($t),"down",($t),0]], categories: {up:{class:"rect_has_data", tooltip_html:"<b>UP</b>"}, degraded:{class:"rect_partial", tooltip_html:"<b>DEGRADED</b>"}, down:{class:"rect_has_no_data", tooltip_html:"<b>DOWN</b>"}, no_data:{class:"rect_no_data", tooltip_html:"<b>NO DATA</b>"}}}]' > docs/status.json
+            exit 0
           fi
 
-      - name: Check Telegram getMe (if TELEGRAM_TOKEN set) and write bot_info.json
-        run: |
-          now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          if [ -n "${TELEGRAM_TOKEN}" ]; then
-            echo "Checking Telegram API getMe..."
-            if curl -sS --max-time 10 "https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe" -o /tmp/tgresp.json; then
-              # if response JSON with ok==true, store it as bot_info.json
-              if jq -e '.ok == true' /tmp/tgresp.json >/dev/null 2>&1; then
-                # add a checked_at timestamp
-                jq --arg t "$now" '. + {checked_at: $t}' /tmp/tgresp.json > "${BOT_INFO_FILE}"
+          # call getMe
+          if curl -sS --max-time 10 "https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe" -o /tmp/tg.json; then
+            # If Telegram returned valid JSON, add checked_at and write docs/bot_info.json
+            if jq -e . /tmp/tg.json >/dev/null 2>&1; then
+              jq --arg t "$now" '. + {checked_at: $t}' /tmp/tg.json > docs/bot_info.json
+              ok=$(jq -r '.ok' docs/bot_info.json)
+              if [ "$ok" = "true" ]; then
+                # bot exists -> mark 'up' in status.json
+                jq -n --arg t "$now" '[{measure:"e2dashboard_status", data:[[($t),"up",($t),99.99]], categories: {up:{class:"rect_has_data", tooltip_html:"<b>UP</b>"}, degraded:{class:"rect_partial", tooltip_html:"<b>DEGRADED</b>"}, down:{class:"rect_has_no_data", tooltip_html:"<b>DOWN</b>"}, no_data:{class:"rect_no_data", tooltip_html:"<b>NO DATA</b>"}}}]' > docs/status.json
               else
-                jq -n --arg t "$now" --argjson ok false '{ok:$ok, checked_at:$t, note:"telegram getMe returned non-ok"}' > "${BOT_INFO_FILE}"
+                # telegram returned ok==false
+                jq -n --arg t "$now" '[{measure:"e2dashboard_status", data:[[($t),"down",($t),0]], categories: {up:{class:"rect_has_data", tooltip_html:"<b>UP</b>"}, degraded:{class:"rect_partial", tooltip_html:"<b>DEGRADED</b>"}, down:{class:"rect_has_no_data", tooltip_html:"<b>DOWN</b>"}, no_data:{class:"rect_no_data", tooltip_html:"<b>NO DATA</b>"}}}]' > docs/status.json
               fi
             else
-              jq -n --arg t "$now" --argjson ok false '{ok:$ok, checked_at:$t, note:"curl failed"}' > "${BOT_INFO_FILE}"
+              # invalid JSON
+              jq -n --arg t "$now" '{ok:false, checked_at:$t, note:"invalid json from getMe"}' > docs/bot_info.json
+              jq -n --arg t "$now" '[{measure:"e2dashboard_status", data:[[($t),"down",($t),0]], categories: {up:{class:"rect_has_data", tooltip_html:"<b>UP</b>"}, degraded:{class:"rect_partial", tooltip_html:"<b>DEGRADED</b>"}, down:{class:"rect_has_no_data", tooltip_html:"<b>DOWN</b>"}, no_data:{class:"rect_no_data", tooltip_html:"<b>NO DATA</b>"}}}]' > docs/status.json
             fi
           else
-            jq -n --arg t "$now" --argjson ok false '{ok:$ok, checked_at:$t, note:"TELEGRAM_TOKEN not set"}' > "${BOT_INFO_FILE}"
+            # curl failed (network/timeout)
+            jq -n --arg t "$now" '{ok:false, checked_at:$t, note:"curl failed or timeout"}' > docs/bot_info.json
+            jq -n --arg t "$now" '[{measure:"e2dashboard_status", data:[[($t),"down",($t),0]], categories: {up:{class:"rect_has_data", tooltip_html:"<b>UP</b>"}, degraded:{class:"rect_partial", tooltip_html:"<b>DEGRADED</b>"}, down:{class:"rect_has_no_data", tooltip_html:"<b>DOWN</b>"}, no_data:{class:"rect_no_data", tooltip_html:"<b>NO DATA</b>"}}}]' > docs/status.json
           fi
 
-      - name: Commit docs files
+      - name: Commit updated docs JSON files
         uses: EndBug/add-and-commit@v9
         with:
           author_name: 'github-actions[bot]'
           author_email: '41898282+github-actions[bot]@users.noreply.github.com'
-          message: 'chore: update status files from scheduled ping'
-          add: 'docs/status.json,docs/bot_info.json'
+          message: 'chore(actions): update bot_info and status from getMe'
+          add: 'docs/bot_info.json,docs/status.json'
           branch: main
