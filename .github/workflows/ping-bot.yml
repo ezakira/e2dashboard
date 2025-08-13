@@ -86,10 +86,8 @@ jobs:
       - name: Commit updated docs JSON files
         uses: EndBug/add-and-commit@v9
         with:
-          author_name: 'github-actions[bot]'
-          author_email: '41898282+github-actions[bot]@users.noreply.github.com'
-          message: 'chore(actions): update bot_info and status from getMe'
-          add: 'docs/bot_info.json docs/status.json'
+          author_name: github-actions[bot]
+          author_email: 41898282+github-actions[bot]@users.noreply.github.com
+          message: "chore(actions): update bot_info and status from getMe"
+          add: "docs/bot_info.json docs/status.json"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          fetch: true
-          pull: true
