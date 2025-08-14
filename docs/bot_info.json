@@ -11,10 +11,10 @@
     "can_connect_to_business": false,
     "has_main_web_app": false
   },
-  "checked_at": "2025-08-14T04:52:50Z",
+  "checked_at": "2025-08-14T05:42:40Z",
   "uptime": "00:00:00",
-  "memory": 3.57,
+  "memory": 3.38,
   "version": "1.0.1",
-  "started_at": "2025-08-14T04:52:50Z",
+  "started_at": "2025-08-14T05:42:40Z",
   "platform": "telegram_bot"
 }
